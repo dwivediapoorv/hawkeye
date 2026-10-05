@@ -23,6 +23,7 @@ import type { Finding } from "../services/structured-data.server";
 import {
   DESCRIPTION_MAX_LENGTH,
   ITEMS_PAGE_SIZE,
+  SCAN_STALE_AFTER_MS,
   TITLE_MAX_LENGTH,
 } from "../seo/limits";
 
@@ -42,8 +43,15 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
   const { session } = await authenticate.admin(request);
   const shop = session.shop;
 
-  await failStaleScans(shop);
-  const scan = await getLatestScan(shop);
+  let scan = await getLatestScan(shop);
+  // Only clean up when the latest scan looks abandoned, rather than on every poll.
+  if (
+    scan?.status === "RUNNING" &&
+    Date.now() - new Date(scan.startedAt).getTime() > SCAN_STALE_AFTER_MS
+  ) {
+    await failStaleScans(shop);
+    scan = await getLatestScan(shop);
+  }
 
   const url = new URL(request.url);
   const type = (url.searchParams.get("type") || "all") as ResourceFilter;
@@ -165,8 +173,17 @@ export default function Index() {
   const pageCount = Math.max(1, Math.ceil(total / ITEMS_PAGE_SIZE));
   const schemaDone = scan?.status === "COMPLETED";
   // Issues found so far are real, but "All good" only holds once the scan has finished.
-  const issueTone = (count: number): "critical" | "success" | undefined =>
-    count ? "critical" : schemaDone ? "success" : undefined;
+  const issueStatus = (count: number): StatStatus =>
+    count
+      ? { tone: "critical", text: "Needs attention" }
+      : schemaDone
+        ? { tone: "success", text: "All good" }
+        : { text: isRunning ? "Checking…" : "Incomplete" };
+  const schemaStatus: StatStatus = scan?.storefrontBlocked
+    ? { tone: "warning", text: "Not checked" }
+    : schemaDone
+      ? issueStatus(scan?.schemaIssueCount ?? 0)
+      : { text: isRunning ? "Waiting" : "Not checked" };
 
   return (
     <s-page heading="Hawk Eye">
@@ -208,51 +225,59 @@ export default function Index() {
 
       {scan && (
         <s-section heading="Summary">
-          <s-grid
-            gridTemplateColumns="repeat(auto-fit, minmax(160px, 1fr))"
-            gap="base"
-          >
-            <Stat label="Products scanned" value={scan.productCount} />
-            <Stat label="Collections scanned" value={scan.collectionCount} />
-            <Stat
-              label={`Titles over ${TITLE_MAX_LENGTH} chars`}
-              value={scan.longTitleCount}
-              tone={issueTone(scan.longTitleCount)}
-            />
-            <Stat
-              label={`Descriptions over ${DESCRIPTION_MAX_LENGTH} chars`}
-              value={scan.longDescriptionCount}
-              tone={issueTone(scan.longDescriptionCount)}
-            />
-            <Stat
-              label="Missing descriptions"
-              value={scan.missingDescriptionCount}
-              tone={issueTone(scan.missingDescriptionCount)}
-            />
-            <Stat
-              label="Duplicate titles"
-              value={scan.duplicateTitleCount}
-              tone={issueTone(scan.duplicateTitleCount)}
-            />
-            <Stat
-              label="Pages with schema issues"
-              value={scan.schemaIssueCount}
-              tone={
-                !schemaDone || scan.storefrontBlocked
-                  ? undefined
-                  : scan.schemaIssueCount
-                    ? "critical"
-                    : "success"
-              }
-            />
-          </s-grid>
-          <s-paragraph>
+          <s-stack direction="block" gap="base">
             <s-text color="subdued">
               {scan.status === "COMPLETED"
                 ? `Completed ${formatDate(scan.completedAt!)}`
                 : `Started ${formatDate(scan.startedAt)}`}
+              {" · "}
+              {scan.productCount.toLocaleString()}{" "}
+              {scan.productCount === 1 ? "product" : "products"} and{" "}
+              {scan.collectionCount.toLocaleString()}{" "}
+              {scan.collectionCount === 1 ? "collection" : "collections"} scanned
             </s-text>
-          </s-paragraph>
+            <s-grid
+              gridTemplateColumns="repeat(auto-fit, minmax(170px, 1fr))"
+              gap="base"
+            >
+              <Stat
+                label="Long titles"
+                caption={`Over ${TITLE_MAX_LENGTH} characters`}
+                value={scan.longTitleCount}
+                status={issueStatus(scan.longTitleCount)}
+              />
+              <Stat
+                label="Long descriptions"
+                caption={`Over ${DESCRIPTION_MAX_LENGTH} characters`}
+                value={scan.longDescriptionCount}
+                status={issueStatus(scan.longDescriptionCount)}
+              />
+              <Stat
+                label="Missing descriptions"
+                caption="Nothing for Google to show"
+                value={scan.missingDescriptionCount}
+                status={issueStatus(scan.missingDescriptionCount)}
+              />
+              <Stat
+                label="Duplicate titles"
+                caption="Shared by 2+ pages"
+                value={scan.duplicateTitleCount}
+                status={issueStatus(scan.duplicateTitleCount)}
+              />
+              <Stat
+                label="Schema issues"
+                caption={
+                  scan.storefrontBlocked
+                    ? "Storefront is password protected"
+                    : schemaDone
+                      ? `Across ${schemaChecks.length} sampled pages`
+                      : "Checked after the catalog"
+                }
+                value={scan.schemaIssueCount}
+                status={schemaStatus}
+              />
+            </s-grid>
+          </s-stack>
         </s-section>
       )}
 
@@ -474,23 +499,30 @@ export default function Index() {
   );
 }
 
+type StatStatus = { tone?: "critical" | "success" | "warning"; text: string };
+
 function Stat({
   label,
+  caption,
   value,
-  tone,
+  status,
 }: {
   label: string;
+  caption: string;
   value: number;
-  tone?: "critical" | "success";
+  status: StatStatus;
 }) {
   return (
     <s-box padding="base" borderWidth="base" borderRadius="base">
       <s-stack direction="block" gap="small-200">
-        <s-text color="subdued">{label}</s-text>
-        <s-heading>{value.toLocaleString()}</s-heading>
-        {tone && (
-          <s-badge tone={tone}>{tone === "critical" ? "Needs attention" : "All good"}</s-badge>
-        )}
+        <s-text type="strong">{label}</s-text>
+        <div style={{ fontSize: "28px", fontWeight: 650, lineHeight: 1.2 }}>
+          {value.toLocaleString()}
+        </div>
+        <s-text color="subdued">{caption}</s-text>
+        <s-stack direction="inline">
+          <s-badge {...(status.tone ? { tone: status.tone } : {})}>{status.text}</s-badge>
+        </s-stack>
       </s-stack>
     </s-box>
   );

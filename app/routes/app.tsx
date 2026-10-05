@@ -16,6 +16,10 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
   return { apiKey: process.env.SHOPIFY_API_KEY || "" };
 };
 
+// This loader only records the visit and passes the API key; neither needs
+// repeating while the dashboard polls during a scan.
+export const shouldRevalidate = () => false;
+
 export default function App() {
   const { apiKey } = useLoaderData<typeof loader>();
 
