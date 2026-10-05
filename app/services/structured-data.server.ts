@@ -23,6 +23,10 @@ export type SampledPages = {
 const STOREFRONT_QUERY = `#graphql
   query StructuredDataStorefront {
     shop { primaryDomain { url } }
+  }`;
+
+const PASSWORD_QUERY = `#graphql
+  query StructuredDataPassword {
     onlineStore { passwordProtection { enabled } }
   }`;
 
@@ -38,13 +42,10 @@ export async function checkStructuredData(
 ): Promise<{ blocked: boolean; checks: PageCheck[] }> {
   const response = await graphql(STOREFRONT_QUERY);
   const { data } = (await response.json()) as {
-    data?: {
-      shop: { primaryDomain: { url: string } };
-      onlineStore: { passwordProtection: { enabled: boolean } } | null;
-    };
+    data?: { shop: { primaryDomain: { url: string } } };
   };
   if (!data) throw new Error("Could not read the storefront domain.");
-  if (data.onlineStore?.passwordProtection.enabled) {
+  if (await isPasswordProtected(graphql)) {
     return { blocked: true, checks: [] };
   }
 
@@ -79,6 +80,20 @@ export async function checkStructuredData(
 }
 
 const PASSWORD_PAGE = "The storefront is password protected.";
+
+// Best effort: if this field is unavailable (e.g. behind a scope the app does
+// not hold), fall back to detecting the password page when pages are fetched.
+async function isPasswordProtected(graphql: GraphqlClient) {
+  try {
+    const response = await graphql(PASSWORD_QUERY);
+    const { data } = (await response.json()) as {
+      data?: { onlineStore: { passwordProtection: { enabled: boolean } } | null };
+    };
+    return data?.onlineStore?.passwordProtection.enabled === true;
+  } catch {
+    return false;
+  }
+}
 
 export async function checkPage(
   page: Omit<PageCheck, "status" | "schemaTypes" | "findings">,
