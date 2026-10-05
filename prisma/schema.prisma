@@ -1,0 +1,123 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+// Note that some adapters may set a maximum length for the String type by default, please ensure your strings are long
+// enough when changing adapters.
+// See https://www.prisma.io/docs/orm/reference/prisma-schema-reference#string for more information
+datasource db {
+  provider  = "postgresql"
+  // Supabase: DATABASE_URL is the pooled connection (port 6543, transaction mode),
+  // DIRECT_URL the direct one (port 5432) that Prisma Migrate needs.
+  url       = env("DATABASE_URL")
+  directUrl = env("DIRECT_URL")
+}
+
+model Session {
+  id                  String    @id
+  shop                String
+  state               String
+  isOnline            Boolean   @default(false)
+  scope               String?
+  expires             DateTime?
+  accessToken         String
+  userId              BigInt?
+  firstName           String?
+  lastName            String?
+  email               String?
+  accountOwner        Boolean   @default(false)
+  locale              String?
+  collaborator        Boolean?  @default(false)
+  emailVerified       Boolean?  @default(false)
+  refreshToken        String?
+  refreshTokenExpires DateTime?
+}
+
+model Scan {
+  id                      String        @id @default(cuid())
+  shop                    String
+  status                  String // RUNNING | COMPLETED | FAILED
+  error                   String?
+  startedAt               DateTime      @default(now())
+  completedAt             DateTime?
+  productCount            Int           @default(0)
+  collectionCount         Int           @default(0)
+  longTitleCount          Int           @default(0)
+  longDescriptionCount    Int           @default(0)
+  duplicateTitleCount     Int           @default(0)
+  missingDescriptionCount Int           @default(0)
+  schemaIssueCount        Int           @default(0)
+  // True when the storefront is password protected, so pages could not be fetched.
+  storefrontBlocked       Boolean       @default(false)
+  items                   ScanItem[]
+  schemaChecks            SchemaCheck[]
+
+  @@index([shop, startedAt])
+}
+
+// One row per product/collection that has at least one issue.
+model ScanItem {
+  id                   String  @id @default(cuid())
+  scanId               String
+  scan                 Scan    @relation(fields: [scanId], references: [id], onDelete: Cascade)
+  resourceType         String // PRODUCT | COLLECTION
+  resourceId           String // gid://shopify/Product/123
+  handle               String
+  name                 String // the product/collection title
+  metaTitle            String
+  metaDescription      String
+  titleLength          Int
+  descriptionLength    Int
+  titleTooLong         Boolean
+  descriptionTooLong   Boolean
+  // True when no custom SEO value is set and Shopify falls back to the name / body text.
+  titleIsDefault       Boolean
+  descriptionIsDefault Boolean
+  // Another product/collection in the same scan has the identical meta title.
+  titleDuplicate       Boolean @default(false)
+  // Neither a custom SEO description nor body text to fall back on.
+  descriptionMissing   Boolean @default(false)
+
+  @@index([scanId, resourceType])
+  @@index([scanId, titleTooLong])
+  @@index([scanId, descriptionTooLong])
+}
+
+// Structured data (JSON-LD) found on one sampled storefront page.
+model SchemaCheck {
+  id          String @id @default(cuid())
+  scanId      String
+  scan        Scan   @relation(fields: [scanId], references: [id], onDelete: Cascade)
+  pageType    String // HOME | PRODUCT | COLLECTION
+  url         String
+  label       String // "Homepage" or the product/collection title
+  status      String // OK | ISSUES | FAILED
+  schemaTypes Json // string[] of schema.org @type values found on the page
+  findings    Json // { severity: "error" | "warning" | "info", message: string }[]
+
+  @@index([scanId])
+}
+
+// One row per store that has ever installed the app. Kept after uninstall so
+// install history survives for the admin dashboard.
+model Shop {
+  domain        String    @id // example.myshopify.com
+  installedAt   DateTime  @default(now())
+  uninstalledAt DateTime?
+  lastSeenAt    DateTime  @default(now())
+  plan          String    @default("free") // Hawk Eye plan, not the Shopify plan
+
+  // Store profile from the Shopify Admin API, refreshed on app load (see shop-profile.server.ts).
+  shopName        String?
+  ownerName       String?
+  email           String? // shop owner's email
+  contactEmail    String? // public-facing contact email
+  phone           String?
+  country         String?
+  shopifyPlan     String? // e.g. "Basic", "Shopify", "Developer Preview"
+  isDevStore      Boolean   @default(false)
+  profileSyncedAt DateTime?
+}
