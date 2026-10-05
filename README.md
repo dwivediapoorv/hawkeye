@@ -54,7 +54,7 @@ npm run dev
 Done once from the testing laptop, since `shopify app deploy` needs the Partner login:
 
 1. Railway → New Project → Deploy from GitHub → this repo. It picks up the Dockerfile.
-2. Variables: `DATABASE_URL`, `DIRECT_URL`, `SHOPIFY_API_KEY`, `SHOPIFY_API_SECRET` (Partner Dashboard → app → Client credentials), `SCOPES=write_products`, `SHOPIFY_APP_URL` (the Railway domain).
+2. Variables: `DATABASE_URL`, `DIRECT_URL`, `SHOPIFY_API_KEY`, `SHOPIFY_API_SECRET` (Partner Dashboard → app → Client credentials), `SCOPES=read_products,write_products`, `SHOPIFY_APP_URL` (the Railway domain).
 3. Set `application_url` and `redirect_urls` in `shopify.app.toml` to the Railway domain, then `npm run deploy` to push the config to Shopify. Commit the toml.
 
 ## Admin dashboard
@@ -63,7 +63,7 @@ The owner dashboard (which stores installed the app, how actively they scan, per
 
 ## Roadmap
 
-- **Phase 2:** generate compliant titles/descriptions with an LLM and apply them back to Shopify with one click (needs the `write_products` scope, which is already requested).
+- **Phase 2:** generate compliant titles/descriptions with an LLM and apply them back to Shopify with one click (the `write_products` scope is already requested).
 
 ---
 
