@@ -164,6 +164,9 @@ export default function Index() {
 
   const pageCount = Math.max(1, Math.ceil(total / ITEMS_PAGE_SIZE));
   const schemaDone = scan?.status === "COMPLETED";
+  // Issues found so far are real, but "All good" only holds once the scan has finished.
+  const issueTone = (count: number): "critical" | "success" | undefined =>
+    count ? "critical" : schemaDone ? "success" : undefined;
 
   return (
     <s-page heading="Hawk Eye">
@@ -214,22 +217,22 @@ export default function Index() {
             <Stat
               label={`Titles over ${TITLE_MAX_LENGTH} chars`}
               value={scan.longTitleCount}
-              tone={scan.longTitleCount ? "critical" : "success"}
+              tone={issueTone(scan.longTitleCount)}
             />
             <Stat
               label={`Descriptions over ${DESCRIPTION_MAX_LENGTH} chars`}
               value={scan.longDescriptionCount}
-              tone={scan.longDescriptionCount ? "critical" : "success"}
+              tone={issueTone(scan.longDescriptionCount)}
             />
             <Stat
               label="Missing descriptions"
               value={scan.missingDescriptionCount}
-              tone={scan.missingDescriptionCount ? "critical" : "success"}
+              tone={issueTone(scan.missingDescriptionCount)}
             />
             <Stat
               label="Duplicate titles"
               value={scan.duplicateTitleCount}
-              tone={scan.duplicateTitleCount ? "critical" : "success"}
+              tone={issueTone(scan.duplicateTitleCount)}
             />
             <Stat
               label="Pages with schema issues"
@@ -286,7 +289,9 @@ export default function Index() {
               <s-paragraph>
                 {isRunning
                   ? "No issues found yet."
-                  : "No issues match these filters. 🎉"}
+                  : schemaDone
+                    ? "No issues match these filters. 🎉"
+                    : "No issues were found before the scan stopped. Run it again for complete results."}
               </s-paragraph>
             </s-box>
           ) : (
