@@ -465,31 +465,6 @@ export default function Index() {
           )}
         </s-section>
       )}
-
-      <s-section slot="aside" heading="How it works">
-        <s-paragraph>
-          Google usually shows about {TITLE_MAX_LENGTH} characters of a page
-          title and {DESCRIPTION_MAX_LENGTH} characters of a description before
-          cutting them off.
-        </s-paragraph>
-        <s-paragraph>
-          When a product or collection has no custom SEO title or description,
-          Shopify falls back to its name and body text. Those rows are marked{" "}
-          <s-badge tone="warning">Default</s-badge>, and the fix is to set a
-          custom value in the <s-text type="strong">Search engine listing</s-text>{" "}
-          section of the product or collection.
-        </s-paragraph>
-        <s-paragraph>
-          Structured data (schema.org JSON-LD) is what lets search results show
-          prices, availability, star ratings and breadcrumbs. It is rendered by
-          your theme and by apps, so Hawk Eye checks the live pages exactly as
-          search engines see them.
-        </s-paragraph>
-        <s-paragraph>
-          Draft and archived products are skipped because they are not visible
-          to search engines.
-        </s-paragraph>
-      </s-section>
     </s-page>
   );
 }
