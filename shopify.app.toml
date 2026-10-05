@@ -1,10 +1,19 @@
 # This file stores configurations for your Shopify app.
 client_id = ""
 name = "Hawk Eye"
+application_url = "https://hawkeye-production-fcfb.up.railway.app"
+embedded = true
+
+[auth]
+redirect_urls = [
+  "https://hawkeye-production-fcfb.up.railway.app/auth/callback",
+  "https://hawkeye-production-fcfb.up.railway.app/auth/shopify/callback",
+  "https://hawkeye-production-fcfb.up.railway.app/api/auth/callback"
+]
 
 [access_scopes]
 # Learn more at https://shopify.dev/docs/apps/tools/cli/configuration#access_scopes
-scopes = "write_products"
+scopes = "read_products,write_products"
 
 [webhooks]
 api_version = "2026-10"
