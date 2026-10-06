@@ -21,61 +21,58 @@
   line-height: 1.5;
 }
 
-/* Circular scan button: gradient ring with a thin inner ring. */
+/* Gradient pill, a deeper shade of the progress bar's blue → cyan so white text stays readable. */
 .scanButton {
-  position: relative;
-  width: 168px;
-  height: 168px;
-  border-radius: 50%;
-  border: 3px solid transparent;
-  background:
-    linear-gradient(#fff, #fff) padding-box,
-    linear-gradient(135deg, #2ee6d6, #1a8cff) border-box;
-  color: #1a1a1a;
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  padding: 14px 36px;
+  border: none;
+  border-radius: 999px;
+  background: linear-gradient(90deg, #1565d8, #0b86a6);
+  color: #fff;
   font: inherit;
-  font-size: 28px;
-  font-weight: 500;
-  letter-spacing: 0.14em;
+  font-size: 18px;
+  font-weight: 650;
   cursor: pointer;
+  box-shadow: 0 4px 14px rgba(21, 101, 216, 0.25);
   transition:
-    transform 0.2s ease,
-    box-shadow 0.2s ease;
-  animation: pulse 2.4s ease-in-out infinite;
+    transform 0.15s ease,
+    box-shadow 0.15s ease;
 }
 
-.scanButton::after {
-  content: "";
-  position: absolute;
-  inset: 5px;
-  border-radius: 50%;
-  border: 1.5px solid rgba(34, 190, 230, 0.55);
-  pointer-events: none;
+.arrow {
+  transition: transform 0.15s ease;
 }
 
 .scanButton:hover:not(:disabled) {
-  transform: scale(1.04);
-  box-shadow: 0 0 32px rgba(26, 160, 255, 0.35);
+  transform: translateY(-1px);
+  box-shadow: 0 8px 22px rgba(21, 101, 216, 0.35);
+}
+
+.scanButton:hover:not(:disabled) .arrow {
+  transform: translateX(3px);
+}
+
+.scanButton:active:not(:disabled) {
+  transform: translateY(0);
+  box-shadow: 0 2px 8px rgba(21, 101, 216, 0.25);
 }
 
 .scanButton:focus-visible {
-  outline: 2px solid #1a8cff;
-  outline-offset: 6px;
+  outline: 2px solid #1565d8;
+  outline-offset: 4px;
 }
 
 .scanButton:disabled {
   cursor: default;
   opacity: 0.6;
-  animation: none;
 }
 
-@keyframes pulse {
-  0%,
-  100% {
-    box-shadow: 0 0 0 0 rgba(46, 230, 214, 0.35);
-  }
-  50% {
-    box-shadow: 0 0 0 12px rgba(46, 230, 214, 0);
-  }
+.note {
+  margin: -8px 0 0;
+  color: #8a8a8a;
+  font-size: 13px;
 }
 
 
@@ -129,11 +126,12 @@
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .scanButton,
   .fill::after {
     animation: none;
   }
-  .fill {
+  .fill,
+  .scanButton,
+  .arrow {
     transition: none;
   }
 }

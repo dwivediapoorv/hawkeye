@@ -146,7 +146,7 @@ function scanProgress(
 ): { value: number; label: string } {
   if (finished) return { value: 1, label: "Scan complete" };
   if (!scan || scan.productTotal === null || scan.collectionTotal === null) {
-    return { value: 0, label: "Starting scan…" };
+    return { value: 0, label: "Initializing…" };
   }
   if (scan.pagesTotal !== null) {
     return {

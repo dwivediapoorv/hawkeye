@@ -1,7 +1,7 @@
 import type { ReactNode } from "react";
 import styles from "./ScanHero.module.css";
 
-// Empty state before the first scan: a short intro and the round scan button.
+// Empty state before the first scan: a short intro and the scan button.
 export function ScanIntro({
   heading,
   children,
@@ -22,10 +22,13 @@ export function ScanIntro({
         className={styles.scanButton}
         onClick={onScan}
         disabled={disabled}
-        aria-label="Scan my store"
       >
-        SCAN
+        Scan my store
+        <span className={styles.arrow} aria-hidden="true">
+          →
+        </span>
       </button>
+      <p className={styles.note}>Read-only · nothing in your store is changed</p>
     </div>
   );
 }
