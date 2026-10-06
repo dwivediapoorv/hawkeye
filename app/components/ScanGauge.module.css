@@ -7,6 +7,13 @@
   text-align: center;
 }
 
+.heading {
+  margin: 0 0 -8px;
+  font-size: 20px;
+  font-weight: 650;
+  color: #1a1a1a;
+}
+
 .intro {
   max-width: 560px;
   margin: 0;
@@ -92,12 +99,6 @@
 .tick {
   stroke: #c4c4c4;
   stroke-width: 2;
-}
-
-.tickLabel {
-  fill: #8a8a8a;
-  font-size: 11px;
-  font-weight: 600;
 }
 
 .needle {

@@ -244,9 +244,12 @@ export default function Index() {
 
   return (
     <s-page heading="Hawk Eye" inlineSize="large">
-      <s-button slot="primary-action" onClick={runScan} {...busyProps}>
-        {scan ? "Run scan again" : "Run scan"}
-      </s-button>
+      {/* The empty state and the gauge have their own scan control. */}
+      {scan && !showGauge && (
+        <s-button slot="primary-action" onClick={runScan} {...busyProps}>
+          Run scan again
+        </s-button>
+      )}
 
       {showGauge && (
         <s-section>
@@ -261,8 +264,12 @@ export default function Index() {
       )}
 
       {!scan && !showGauge && (
-        <s-section heading="Scan your store for SEO issues">
-          <ScanIntro onScan={runScan} disabled={busy}>
+        <s-section>
+          <ScanIntro
+            heading="Scan your store for SEO issues"
+            onScan={runScan}
+            disabled={busy}
+          >
             The scan reads every active product and collection and flags meta
             titles longer than {TITLE_MAX_LENGTH} characters, meta descriptions
             longer than {DESCRIPTION_MAX_LENGTH} characters, missing

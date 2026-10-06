@@ -20,16 +20,19 @@ const ARC_PATH = `M ${ARC_START.x} ${ARC_START.y} A ${R} ${R} 0 1 1 ${ARC_END.x}
 
 // Empty state before the first scan: a short intro and the round scan button.
 export function ScanIntro({
+  heading,
   children,
   onScan,
   disabled,
 }: {
+  heading: string;
   children: ReactNode;
   onScan: () => void;
   disabled?: boolean;
 }) {
   return (
     <div className={styles.hero}>
+      <h2 className={styles.heading}>{heading}</h2>
       <p className={styles.intro}>{children}</p>
       <button
         type="button"
@@ -81,20 +84,15 @@ export function ScanGauge({ value, label }: { value: number; label: string }) {
           const deg = START_DEG + SWEEP_DEG * t;
           const outer = point(deg, 84);
           const inner = point(deg, 78);
-          const text = point(deg, 64);
           return (
-            <g key={t}>
-              <line className={styles.tick} x1={inner.x} y1={inner.y} x2={outer.x} y2={outer.y} />
-              <text
-                className={styles.tickLabel}
-                x={text.x}
-                y={text.y}
-                textAnchor="middle"
-                dominantBaseline="middle"
-              >
-                {t * 100}
-              </text>
-            </g>
+            <line
+              key={t}
+              className={styles.tick}
+              x1={inner.x}
+              y1={inner.y}
+              x2={outer.x}
+              y2={outer.y}
+            />
           );
         })}
 
