@@ -186,7 +186,7 @@ export default function Index() {
       : { text: isRunning ? "Waiting" : "Not checked" };
 
   return (
-    <s-page heading="Hawk Eye">
+    <s-page heading="Hawk Eye" inlineSize="large">
       <s-button
         slot="primary-action"
         onClick={() => fetcher.submit({}, { method: "POST" })}
@@ -254,7 +254,7 @@ export default function Index() {
               />
               <Stat
                 label="Missing descriptions"
-                caption="Nothing for Google to show"
+                caption="No SEO or body text"
                 value={scan.missingDescriptionCount}
                 status={issueStatus(scan.missingDescriptionCount)}
               />
@@ -268,9 +268,9 @@ export default function Index() {
                 label="Schema issues"
                 caption={
                   scan.storefrontBlocked
-                    ? "Storefront is password protected"
+                    ? "Storefront is locked"
                     : schemaDone
-                      ? `Across ${schemaChecks.length} sampled pages`
+                      ? `${schemaChecks.length} pages sampled`
                       : "Checked after the catalog"
                 }
                 value={scan.schemaIssueCount}
@@ -514,15 +514,15 @@ function Stat({
 }) {
   return (
     <s-box padding="base" borderWidth="base" borderRadius="base">
-      <s-stack direction="block" gap="small-200">
+      <s-stack direction="block" gap="small-300">
         <s-text type="strong">{label}</s-text>
-        <div style={{ fontSize: "28px", fontWeight: 650, lineHeight: 1.2 }}>
-          {value.toLocaleString()}
-        </div>
-        <s-text color="subdued">{caption}</s-text>
-        <s-stack direction="inline">
+        <s-stack direction="inline" gap="small-200" alignItems="center">
+          <span style={{ fontSize: "22px", fontWeight: 650, lineHeight: 1.2 }}>
+            {value.toLocaleString()}
+          </span>
           <s-badge {...(status.tone ? { tone: status.tone } : {})}>{status.text}</s-badge>
         </s-stack>
+        <s-text color="subdued">{caption}</s-text>
       </s-stack>
     </s-box>
   );
