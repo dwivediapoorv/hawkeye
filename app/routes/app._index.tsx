@@ -170,6 +170,9 @@ export default function Index() {
     setSearchParams(next);
   };
 
+  const runScan = () => fetcher.submit({}, { method: "POST" });
+  const busyProps = isRunning || isStarting ? { loading: true, disabled: true } : {};
+
   const pageCount = Math.max(1, Math.ceil(total / ITEMS_PAGE_SIZE));
   const schemaDone = scan?.status === "COMPLETED";
   // Issues found so far are real, but "All good" only holds once the scan has finished.
@@ -187,11 +190,7 @@ export default function Index() {
 
   return (
     <s-page heading="Hawk Eye" inlineSize="large">
-      <s-button
-        slot="primary-action"
-        onClick={() => fetcher.submit({}, { method: "POST" })}
-        {...(isRunning || isStarting ? { loading: true, disabled: true } : {})}
-      >
+      <s-button slot="primary-action" onClick={runScan} {...busyProps}>
         {scan ? "Run scan again" : "Run scan"}
       </s-button>
 
@@ -217,9 +216,11 @@ export default function Index() {
             titles longer than {TITLE_MAX_LENGTH} characters, meta descriptions
             longer than {DESCRIPTION_MAX_LENGTH} characters, missing
             descriptions and duplicate titles. It also checks the structured
-            data (schema.org JSON-LD) your storefront pages render. Click{" "}
-            <s-text type="strong">Run scan</s-text> to get started.
+            data (schema.org JSON-LD) your storefront pages render.
           </s-paragraph>
+          <s-button variant="primary" onClick={runScan} {...busyProps}>
+            Scan my store
+          </s-button>
         </s-section>
       )}
 
