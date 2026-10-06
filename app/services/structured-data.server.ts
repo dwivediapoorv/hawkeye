@@ -39,6 +39,7 @@ const CONCURRENCY = 3;
 export async function checkStructuredData(
   graphql: GraphqlClient,
   samples: SampledPages,
+  onProgress?: (checked: number, total: number) => Promise<unknown>,
 ): Promise<{ blocked: boolean; checks: PageCheck[] }> {
   const response = await graphql(STOREFRONT_QUERY);
   const { data } = (await response.json()) as {
@@ -65,9 +66,11 @@ export async function checkStructuredData(
   ];
 
   const checks: PageCheck[] = [];
+  await onProgress?.(0, pages.length);
   for (let i = 0; i < pages.length; i += CONCURRENCY) {
     const batch = await Promise.all(pages.slice(i, i + CONCURRENCY).map(checkPage));
     checks.push(...batch);
+    await onProgress?.(checks.length, pages.length);
   }
 
   // A password page can appear even when the API said protection is off

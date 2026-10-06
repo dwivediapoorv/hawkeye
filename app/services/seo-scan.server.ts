@@ -60,6 +60,13 @@ const COLLECTIONS_QUERY = `#graphql
     }
   }`;
 
+// Totals for the dashboard's progress gauge. `limit: null` asks for an exact count.
+const COUNTS_QUERY = `#graphql
+  query SeoScanCounts {
+    productsCount(query: "status:active", limit: null) { count }
+    collectionsCount(limit: null) { count }
+  }`;
+
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
 // Runs a query, retrying on Shopify's cost-based throttling and waiting when
@@ -194,6 +201,18 @@ async function runScan(scanId: string, graphql: GraphqlClient) {
   const byTitle = new Map<string, { row: ItemRow; stored: boolean }[]>();
   const samples: SampledPages = { products: [], collections: [] };
 
+  const counts = await query<{
+    productsCount: { count: number };
+    collectionsCount: { count: number };
+  }>(graphql, COUNTS_QUERY, {});
+  await db.scan.update({
+    where: { id: scanId },
+    data: {
+      productTotal: counts.productsCount.count,
+      collectionTotal: counts.collectionsCount.count,
+    },
+  });
+
   const sources = [
     { type: "PRODUCT", document: PRODUCTS_QUERY, field: "products", counter: "productCount", sample: samples.products, sampleSize: PRODUCT_PAGE_SAMPLES },
     { type: "COLLECTION", document: COLLECTIONS_QUERY, field: "collections", counter: "collectionCount", sample: samples.collections, sampleSize: COLLECTION_PAGE_SAMPLES },
@@ -266,7 +285,12 @@ async function runScan(scanId: string, graphql: GraphqlClient) {
   await db.scan.update({ where: { id: scanId }, data: totals });
 
   // Structured data on a sample of live storefront pages.
-  const { blocked, checks } = await checkStructuredData(graphql, samples);
+  const { blocked, checks } = await checkStructuredData(
+    graphql,
+    samples,
+    (pagesChecked, pagesTotal) =>
+      db.scan.update({ where: { id: scanId }, data: { pagesChecked, pagesTotal } }),
+  );
   if (checks.length) {
     await db.schemaCheck.createMany({
       data: checks.map((c) => ({ scanId, ...c })),

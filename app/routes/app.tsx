@@ -26,7 +26,10 @@ export default function App() {
   return (
     <AppProvider apiKey={apiKey}>
       <s-app-nav>
-        <s-link href="/app">Dashboard</s-link>
+        {/* rel="home" makes this the app-name link instead of a sub-item */}
+        <a href="/app" rel="home">
+          Dashboard
+        </a>
       </s-app-nav>
       <Outlet />
     </AppProvider>

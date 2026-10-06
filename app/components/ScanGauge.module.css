@@ -1,0 +1,129 @@
+.hero {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 20px;
+  padding: 24px 16px 32px;
+  text-align: center;
+}
+
+.intro {
+  max-width: 560px;
+  margin: 0;
+  color: #616161;
+  line-height: 1.5;
+}
+
+/* Circular scan button: gradient ring with a thin inner ring. */
+.scanButton {
+  position: relative;
+  width: 168px;
+  height: 168px;
+  border-radius: 50%;
+  border: 3px solid transparent;
+  background:
+    linear-gradient(#fff, #fff) padding-box,
+    linear-gradient(135deg, #2ee6d6, #1a8cff) border-box;
+  color: #1a1a1a;
+  font: inherit;
+  font-size: 28px;
+  font-weight: 500;
+  letter-spacing: 0.14em;
+  cursor: pointer;
+  transition:
+    transform 0.2s ease,
+    box-shadow 0.2s ease;
+  animation: pulse 2.4s ease-in-out infinite;
+}
+
+.scanButton::after {
+  content: "";
+  position: absolute;
+  inset: 5px;
+  border-radius: 50%;
+  border: 1.5px solid rgba(34, 190, 230, 0.55);
+  pointer-events: none;
+}
+
+.scanButton:hover:not(:disabled) {
+  transform: scale(1.04);
+  box-shadow: 0 0 32px rgba(26, 160, 255, 0.35);
+}
+
+.scanButton:focus-visible {
+  outline: 2px solid #1a8cff;
+  outline-offset: 6px;
+}
+
+.scanButton:disabled {
+  cursor: default;
+  opacity: 0.6;
+  animation: none;
+}
+
+@keyframes pulse {
+  0%,
+  100% {
+    box-shadow: 0 0 0 0 rgba(46, 230, 214, 0.35);
+  }
+  50% {
+    box-shadow: 0 0 0 12px rgba(46, 230, 214, 0);
+  }
+}
+
+.gauge {
+  width: 260px;
+  max-width: 100%;
+  height: auto;
+}
+
+.track {
+  fill: none;
+  stroke: #e6e6e6;
+  stroke-width: 18;
+}
+
+.fill {
+  fill: none;
+  stroke-width: 18;
+  transition: stroke-dasharray 1.6s ease-out;
+}
+
+.tick {
+  stroke: #c4c4c4;
+  stroke-width: 2;
+}
+
+.tickLabel {
+  fill: #8a8a8a;
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.needle {
+  transform-box: view-box;
+  transform-origin: 130px 130px;
+  transition: transform 1.6s ease-out;
+}
+
+.percent {
+  fill: #1a1a1a;
+  font-size: 34px;
+  font-weight: 300;
+}
+
+.status {
+  margin: 0;
+  color: #616161;
+  min-height: 1.5em;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .scanButton {
+    animation: none;
+  }
+  .fill,
+  .needle {
+    transition: none;
+  }
+}

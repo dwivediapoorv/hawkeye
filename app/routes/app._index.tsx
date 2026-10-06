@@ -1,4 +1,4 @@
-import { useEffect } from "react";
+import { useEffect, useRef, useState } from "react";
 import type {
   ActionFunctionArgs,
   HeadersFunction,
@@ -14,6 +14,7 @@ import { useAppBridge } from "@shopify/app-bridge-react";
 import { boundary } from "@shopify/shopify-app-react-router/server";
 import { authenticate } from "../shopify.server";
 import db from "../db.server";
+import { ScanGauge, ScanIntro } from "../components/ScanGauge";
 import {
   failStaleScans,
   getLatestScan,
@@ -127,6 +128,43 @@ const PAGE_TYPE_LABEL: Record<string, string> = {
   COLLECTION: "Collection",
 };
 
+type ScanProgressFields = {
+  productCount: number;
+  collectionCount: number;
+  productTotal: number | null;
+  collectionTotal: number | null;
+  pagesChecked: number;
+  pagesTotal: number | null;
+};
+
+// Reading the catalog fills the gauge to 80%; checking storefront pages fills the rest.
+const CATALOG_SHARE = 0.8;
+
+function scanProgress(
+  scan: ScanProgressFields | null,
+  finished: boolean,
+): { value: number; label: string } {
+  if (finished) return { value: 1, label: "Scan complete" };
+  if (!scan || scan.productTotal === null || scan.collectionTotal === null) {
+    return { value: 0, label: "Starting scan…" };
+  }
+  if (scan.pagesTotal !== null) {
+    return {
+      value: CATALOG_SHARE + (1 - CATALOG_SHARE) * (scan.pagesChecked / Math.max(1, scan.pagesTotal)),
+      label: `Checking storefront pages · ${scan.pagesChecked} of ${scan.pagesTotal}`,
+    };
+  }
+  const read = scan.productCount + scan.collectionCount;
+  const value = CATALOG_SHARE * Math.min(1, read / Math.max(1, scan.productTotal + scan.collectionTotal));
+  if (scan.productCount < scan.productTotal) {
+    return { value, label: `Reading products · ${scan.productCount} of ${scan.productTotal}` };
+  }
+  if (scan.collectionCount < scan.collectionTotal) {
+    return { value, label: `Reading collections · ${scan.collectionCount} of ${scan.collectionTotal}` };
+  }
+  return { value, label: "Checking storefront pages…" };
+}
+
 export default function Index() {
   const { scan, items, total, schemaChecks, page, type, issue } =
     useLoaderData<typeof loader>();
@@ -139,6 +177,22 @@ export default function Index() {
   const isStarting =
     ["loading", "submitting"].includes(fetcher.state) &&
     fetcher.formMethod === "POST";
+  const busy = isRunning || isStarting;
+
+  // When a scan finishes, hold the gauge at 100% for a moment before the results appear.
+  const [finishing, setFinishing] = useState(false);
+  const wasBusy = useRef(busy);
+  useEffect(() => {
+    if (wasBusy.current && !busy && scan?.status === "COMPLETED") setFinishing(true);
+    wasBusy.current = busy;
+  }, [busy, scan?.status]);
+  useEffect(() => {
+    if (!finishing) return;
+    const timer = setTimeout(() => setFinishing(false), 2200);
+    return () => clearTimeout(timer);
+  }, [finishing]);
+
+  const showGauge = busy || finishing;
 
   // Poll while a scan is in progress so the counters and table fill in live.
   useEffect(() => {
@@ -171,7 +225,7 @@ export default function Index() {
   };
 
   const runScan = () => fetcher.submit({}, { method: "POST" });
-  const busyProps = isRunning || isStarting ? { loading: true, disabled: true } : {};
+  const busyProps = busy ? { loading: true, disabled: true } : {};
 
   const pageCount = Math.max(1, Math.ceil(total / ITEMS_PAGE_SIZE));
   const schemaDone = scan?.status === "COMPLETED";
@@ -194,37 +248,31 @@ export default function Index() {
         {scan ? "Run scan again" : "Run scan"}
       </s-button>
 
-      {isRunning && (
-        <s-banner heading="Scan in progress" tone="info">
-          <s-paragraph>
-            Reading products and collections, then checking structured data on
-            a sample of storefront pages. Results update automatically.
-          </s-paragraph>
-        </s-banner>
+      {showGauge && (
+        <s-section>
+          <ScanGauge {...scanProgress(isRunning || finishing ? scan : null, finishing)} />
+        </s-section>
       )}
 
-      {scan?.status === "FAILED" && (
+      {scan?.status === "FAILED" && !showGauge && (
         <s-banner heading="The last scan failed" tone="critical">
           <s-paragraph>{scan.error ?? "Unknown error."}</s-paragraph>
         </s-banner>
       )}
 
-      {!scan && (
+      {!scan && !showGauge && (
         <s-section heading="Scan your store for SEO issues">
-          <s-paragraph>
+          <ScanIntro onScan={runScan} disabled={busy}>
             The scan reads every active product and collection and flags meta
             titles longer than {TITLE_MAX_LENGTH} characters, meta descriptions
             longer than {DESCRIPTION_MAX_LENGTH} characters, missing
             descriptions and duplicate titles. It also checks the structured
             data (schema.org JSON-LD) your storefront pages render.
-          </s-paragraph>
-          <s-button variant="primary" onClick={runScan} {...busyProps}>
-            Scan my store
-          </s-button>
+          </ScanIntro>
         </s-section>
       )}
 
-      {scan && (
+      {scan && !showGauge && (
         <s-section heading="Summary">
           <s-stack direction="block" gap="base">
             <s-text color="subdued">
@@ -282,7 +330,7 @@ export default function Index() {
         </s-section>
       )}
 
-      {scan && (
+      {scan && !showGauge && (
         <s-section heading="Meta tag issues">
           <s-stack direction="inline" gap="base" alignItems="end">
             <s-select
@@ -382,7 +430,7 @@ export default function Index() {
         </s-section>
       )}
 
-      {scan && (
+      {scan && !showGauge && (
         <s-section heading="Structured data">
           {scan.storefrontBlocked ? (
             <s-banner heading="Storefront is password protected" tone="warning">
