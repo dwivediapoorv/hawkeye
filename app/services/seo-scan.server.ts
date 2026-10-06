@@ -60,7 +60,7 @@ const COLLECTIONS_QUERY = `#graphql
     }
   }`;
 
-// Totals for the dashboard's progress gauge. `limit: null` asks for an exact count.
+// Totals for the dashboard's progress bar. `limit: null` asks for an exact count.
 const COUNTS_QUERY = `#graphql
   query SeoScanCounts {
     productsCount(query: "status:active", limit: null) { count }

@@ -52,7 +52,7 @@ model Scan {
   schemaIssueCount        Int           @default(0)
   // True when the storefront is password protected, so pages could not be fetched.
   storefrontBlocked       Boolean       @default(false)
-  // Progress for the dashboard gauge. Totals are read from Shopify when the scan starts.
+  // Progress for the dashboard progress bar. Totals are read from Shopify when the scan starts.
   productTotal            Int?
   collectionTotal         Int?
   pagesTotal              Int?

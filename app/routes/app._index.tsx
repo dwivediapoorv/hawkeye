@@ -14,7 +14,7 @@ import { useAppBridge } from "@shopify/app-bridge-react";
 import { boundary } from "@shopify/shopify-app-react-router/server";
 import { authenticate } from "../shopify.server";
 import db from "../db.server";
-import { ScanGauge, ScanIntro } from "../components/ScanGauge";
+import { ScanIntro, ScanProgress } from "../components/ScanHero";
 import {
   failStaleScans,
   getLatestScan,
@@ -137,7 +137,7 @@ type ScanProgressFields = {
   pagesTotal: number | null;
 };
 
-// Reading the catalog fills the gauge to 80%; checking storefront pages fills the rest.
+// Reading the catalog fills the bar to 80%; checking storefront pages fills the rest.
 const CATALOG_SHARE = 0.8;
 
 function scanProgress(
@@ -179,7 +179,7 @@ export default function Index() {
     fetcher.formMethod === "POST";
   const busy = isRunning || isStarting;
 
-  // When a scan finishes, hold the gauge at 100% for a moment before the results appear.
+  // When a scan finishes, hold the bar at 100% for a moment before the results appear.
   const [finishing, setFinishing] = useState(false);
   const wasBusy = useRef(busy);
   useEffect(() => {
@@ -192,7 +192,7 @@ export default function Index() {
     return () => clearTimeout(timer);
   }, [finishing]);
 
-  const showGauge = busy || finishing;
+  const showProgress = busy || finishing;
 
   // Poll while a scan is in progress so the counters and table fill in live.
   useEffect(() => {
@@ -244,26 +244,26 @@ export default function Index() {
 
   return (
     <s-page heading="Hawk Eye" inlineSize="large">
-      {/* The empty state and the gauge have their own scan control. */}
-      {scan && !showGauge && (
+      {/* The empty state and the progress bar have their own scan control. */}
+      {scan && !showProgress && (
         <s-button slot="primary-action" onClick={runScan} {...busyProps}>
           Run scan again
         </s-button>
       )}
 
-      {showGauge && (
+      {showProgress && (
         <s-section>
-          <ScanGauge {...scanProgress(isRunning || finishing ? scan : null, finishing)} />
+          <ScanProgress {...scanProgress(isRunning || finishing ? scan : null, finishing)} />
         </s-section>
       )}
 
-      {scan?.status === "FAILED" && !showGauge && (
+      {scan?.status === "FAILED" && !showProgress && (
         <s-banner heading="The last scan failed" tone="critical">
           <s-paragraph>{scan.error ?? "Unknown error."}</s-paragraph>
         </s-banner>
       )}
 
-      {!scan && !showGauge && (
+      {!scan && !showProgress && (
         <s-section>
           <ScanIntro
             heading="Scan your store for SEO issues"
@@ -279,7 +279,7 @@ export default function Index() {
         </s-section>
       )}
 
-      {scan && !showGauge && (
+      {scan && !showProgress && (
         <s-section heading="Summary">
           <s-stack direction="block" gap="base">
             <s-text color="subdued">
@@ -337,7 +337,7 @@ export default function Index() {
         </s-section>
       )}
 
-      {scan && !showGauge && (
+      {scan && !showProgress && (
         <s-section heading="Meta tag issues">
           <s-stack direction="inline" gap="base" alignItems="end">
             <s-select
@@ -437,7 +437,7 @@ export default function Index() {
         </s-section>
       )}
 
-      {scan && !showGauge && (
+      {scan && !showProgress && (
         <s-section heading="Structured data">
           {scan.storefrontBlocked ? (
             <s-banner heading="Storefront is password protected" tone="warning">
