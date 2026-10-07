@@ -123,7 +123,11 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
 // content and URL checks existed only have the meta tag counts (null = not checked).
 async function groupCountsFor(scanId: string, counts: Partial<IssueCounts>) {
   if (counts.groups && counts.codes) {
-    return { legacy: false, groups: counts.groups, codes: counts.codes };
+    // A group with no issues may be absent on scans saved before every group was recorded.
+    const groups = Object.fromEntries(
+      ISSUE_GROUPS.map((g) => [g.key, counts.groups?.[g.key] ?? 0]),
+    ) as Partial<Record<IssueGroupKey, number>>;
+    return { legacy: false, groups, codes: counts.codes };
   }
   const [titles, descriptions] = await Promise.all([
     db.scanItem.count({ where: { scanId, OR: [{ titleTooLong: true }, { titleDuplicate: true }] } }),

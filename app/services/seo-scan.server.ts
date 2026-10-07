@@ -373,7 +373,11 @@ async function runScan(scanId: string, graphql: GraphqlClient) {
     await db.scanItem.createMany({ data: rows.slice(i, i + 500) });
   }
 
-  const issueCounts: IssueCounts = { codes: {}, groups: {} };
+  // Every group is recorded, even at 0, so "no issues" can't be mistaken for "not checked".
+  const issueCounts: IssueCounts = {
+    codes: {},
+    groups: Object.fromEntries(ISSUE_GROUPS.map((g) => [g.key, 0])),
+  };
   for (const { issues } of flagged) {
     for (const code of issues) issueCounts.codes[code] = (issueCounts.codes[code] ?? 0) + 1;
     for (const group of ISSUE_GROUPS) {
