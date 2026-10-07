@@ -1,12 +1,19 @@
 import type { AdminApiContext } from "@shopify/shopify-app-react-router/server";
+import type { Prisma } from "@prisma/client";
 import db from "../db.server";
 import {
+  COPIED_CONTENT_MIN_WORDS,
   DESCRIPTION_MAX_LENGTH,
+  DESCRIPTION_MIN_LENGTH,
   FALLBACK_DESCRIPTION_TRUNCATE_AT,
+  HANDLE_MAX_LENGTH,
   SCAN_STALE_AFTER_MS,
+  THIN_CONTENT_WORDS,
   TITLE_MAX_LENGTH,
+  TITLE_MIN_LENGTH,
 } from "../seo/limits";
-import { checkStructuredData, type SampledPages } from "./structured-data.server";
+import { ISSUE_GROUPS, type IssueCode, type IssueCounts } from "../seo/issues";
+import { checkStorefront, type SampledPages } from "./storefront-checks.server";
 
 type GraphqlClient = AdminApiContext["graphql"];
 
@@ -18,9 +25,20 @@ type SeoNode = {
   seo: { title: string | null; description: string | null };
 };
 
-type Connection = {
+type ProductNode = SeoNode & {
+  onlineStoreUrl: string | null;
+  media: { nodes: { mediaContentType: string; alt: string | null; image?: { url: string } | null }[] };
+  collections: { nodes: { id: string }[] };
+};
+
+type CollectionNode = SeoNode & {
+  image: { altText: string | null; url: string } | null;
+  productsCount: { count: number } | null;
+};
+
+type Connection<T> = {
   pageInfo: { hasNextPage: boolean; endCursor: string | null };
-  nodes: SeoNode[];
+  nodes: T[];
 };
 
 type ThrottleStatus = {
@@ -28,27 +46,38 @@ type ThrottleStatus = {
   throttleStatus: { currentlyAvailable: number; restoreRate: number };
 };
 
-// How many live storefront pages of each type the structured data check samples.
+// How many live storefront pages of each type the storefront checks sample.
 const PRODUCT_PAGE_SAMPLES = 5;
 const COLLECTION_PAGE_SAMPLES = 3;
 
+// Page sizes keep each query well under Shopify's 1,000-point cost limit:
+// every product also pulls up to 10 images and one collection.
 const PRODUCTS_QUERY = `#graphql
   query SeoScanProducts($cursor: String, $truncateAt: Int!) {
-    products(first: 250, after: $cursor, query: "status:active") {
+    products(first: 25, after: $cursor, query: "status:active") {
       pageInfo { hasNextPage endCursor }
       nodes {
         id
         title
         handle
+        onlineStoreUrl
         description(truncateAt: $truncateAt)
         seo { title description }
+        media(first: 10) {
+          nodes {
+            mediaContentType
+            alt
+            ... on MediaImage { image { url } }
+          }
+        }
+        collections(first: 1) { nodes { id } }
       }
     }
   }`;
 
 const COLLECTIONS_QUERY = `#graphql
   query SeoScanCollections($cursor: String, $truncateAt: Int!) {
-    collections(first: 250, after: $cursor) {
+    collections(first: 100, after: $cursor) {
       pageInfo { hasNextPage endCursor }
       nodes {
         id
@@ -56,6 +85,8 @@ const COLLECTIONS_QUERY = `#graphql
         handle
         description(truncateAt: $truncateAt)
         seo { title description }
+        image { altText url }
+        productsCount { count }
       }
     }
   }`;
@@ -106,14 +137,14 @@ async function query<T>(
   throw new Error("Shopify API kept throttling the request; try again later.");
 }
 
-async function* paginate(
+async function* paginate<T>(
   graphql: GraphqlClient,
   document: string,
   field: "products" | "collections",
 ) {
   let cursor: string | null = null;
   do {
-    const data: Record<string, Connection> = await query(graphql, document, {
+    const data: Record<string, Connection<T>> = await query(graphql, document, {
       cursor,
       truncateAt: FALLBACK_DESCRIPTION_TRUNCATE_AT,
     });
@@ -142,6 +173,102 @@ export function evaluateNode(node: SeoNode) {
     titleIsDefault,
     descriptionIsDefault,
   };
+}
+
+// File names straight from a camera or phone, e.g. IMG_4821.jpg, DSC0012.jpg,
+// PXL_20240101.jpg, "Screenshot 2024-…", or bare numbers/UUIDs.
+const CAMERA_NAME =
+  /^(img|dsc|dscn|dscf|pxl|mvimg|gopr|dji|photo|image|screenshot|screen[-_ ]?shot|whatsapp[-_ ]?image|untitled)[-_ ]?\d/i;
+const MEANINGLESS_NAME = /^([\d_-]+|[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})$/i;
+
+export function isCameraFileName(url: string) {
+  let name: string;
+  try {
+    name = decodeURIComponent(new URL(url).pathname.split("/").pop() ?? "");
+  } catch {
+    return false;
+  }
+  const stem = name.replace(/\.[a-z0-9]+$/i, "");
+  return CAMERA_NAME.test(stem) || MEANINGLESS_NAME.test(stem);
+}
+
+const wordCount = (text: string) => (text.match(/[\p{L}\p{N}]+/gu) ?? []).length;
+
+const isBlank = (value: string | null | undefined) => !value || value.trim() === "";
+
+type Analyzed = {
+  row: Prisma.ScanItemCreateManyInput;
+  issues: Set<IssueCode>;
+  // Normalised body text, for spotting the same description on several products.
+  bodyKey: string | null;
+};
+
+function analyze(
+  scanId: string,
+  resourceType: "PRODUCT" | "COLLECTION",
+  node: SeoNode,
+  images: { alt: string | null; url: string | null }[],
+  extra: { notInCollection?: boolean; empty?: boolean },
+): Analyzed {
+  const meta = evaluateNode(node);
+  const issues = new Set<IssueCode>();
+
+  if (meta.titleTooLong) issues.add("TITLE_LONG");
+  if (meta.titleLength > 0 && meta.titleLength < TITLE_MIN_LENGTH) issues.add("TITLE_SHORT");
+  if (meta.descriptionTooLong) issues.add("DESCRIPTION_LONG");
+  if (meta.descriptionMissing) issues.add("DESCRIPTION_MISSING");
+  else if (meta.descriptionLength < DESCRIPTION_MIN_LENGTH) issues.add("DESCRIPTION_SHORT");
+
+  const body = (node.description ?? "").trim();
+  const words = resourceType === "PRODUCT" ? wordCount(body) : null;
+  if (words !== null && words < THIN_CONTENT_WORDS) issues.add("THIN_CONTENT");
+
+  const imagesMissingAlt = images.filter((i) => isBlank(i.alt)).length;
+  const badImageNames = images.filter((i) => i.url && isCameraFileName(i.url)).length;
+  if (imagesMissingAlt > 0) issues.add("MISSING_ALT");
+  if (badImageNames > 0) issues.add("IMAGE_FILENAMES");
+
+  let handleIssue: string | null = null;
+  if (node.handle.startsWith("copy-of-")) handleIssue = "starts with “copy-of”";
+  else if (node.handle.length > HANDLE_MAX_LENGTH) handleIssue = `${node.handle.length} characters long`;
+  if (handleIssue) issues.add("HANDLE");
+
+  if (extra.notInCollection) issues.add("NO_COLLECTION");
+  if (extra.empty) issues.add("EMPTY_COLLECTION");
+
+  return {
+    row: {
+      scanId,
+      resourceType,
+      resourceId: node.id,
+      handle: node.handle,
+      name: node.title,
+      ...meta,
+      imageCount: images.length,
+      imagesMissingAlt,
+      badImageNames,
+      wordCount: words,
+      handleIssue,
+    },
+    issues,
+    bodyKey:
+      words !== null && words >= COPIED_CONTENT_MIN_WORDS
+        ? body.toLowerCase().replace(/\s+/g, " ")
+        : null,
+  };
+}
+
+// Flags every item in groups (by key) that have more than one member.
+function flagShared(items: Analyzed[], keyOf: (item: Analyzed) => string | null, code: IssueCode) {
+  const groups = new Map<string, Analyzed[]>();
+  for (const item of items) {
+    const key = keyOf(item);
+    if (!key) continue;
+    groups.set(key, [...(groups.get(key) ?? []), item]);
+  }
+  for (const group of groups.values()) {
+    if (group.length > 1) group.forEach((item) => item.issues.add(code));
+  }
 }
 
 // Serialises scans per process so a double click can't start two for the same shop.
@@ -177,30 +304,7 @@ export async function startScan(shop: string, graphql: GraphqlClient) {
   return scan;
 }
 
-type ItemRow = {
-  scanId: string;
-  resourceType: "PRODUCT" | "COLLECTION";
-  resourceId: string;
-  handle: string;
-  name: string;
-} & ReturnType<typeof evaluateNode>;
-
 async function runScan(scanId: string, graphql: GraphqlClient) {
-  const totals = {
-    productCount: 0,
-    collectionCount: 0,
-    longTitleCount: 0,
-    longDescriptionCount: 0,
-    missingDescriptionCount: 0,
-    duplicateTitleCount: 0,
-  };
-
-  // Every item keyed by its (case-insensitive) meta title, so duplicates can be
-  // found once the whole catalog has been read. `stored` tracks whether the row
-  // was already written because of another issue.
-  const byTitle = new Map<string, { row: ItemRow; stored: boolean }[]>();
-  const samples: SampledPages = { products: [], collections: [] };
-
   const counts = await query<{
     productsCount: { count: number };
     collectionsCount: { count: number };
@@ -213,79 +317,85 @@ async function runScan(scanId: string, graphql: GraphqlClient) {
     },
   });
 
-  const sources = [
-    { type: "PRODUCT", document: PRODUCTS_QUERY, field: "products", counter: "productCount", sample: samples.products, sampleSize: PRODUCT_PAGE_SAMPLES },
-    { type: "COLLECTION", document: COLLECTIONS_QUERY, field: "collections", counter: "collectionCount", sample: samples.collections, sampleSize: COLLECTION_PAGE_SAMPLES },
-  ] as const;
+  // Duplicate and copied-content checks need the whole catalog, so every item
+  // is analysed in memory first and only the flagged ones are written at the end.
+  const items: Analyzed[] = [];
+  const samples: SampledPages = { products: [], collections: [] };
+  let productCount = 0;
+  let collectionCount = 0;
 
-  for (const source of sources) {
-    for await (const nodes of paginate(graphql, source.document, source.field)) {
-      totals[source.counter] += nodes.length;
-
-      for (const node of nodes.slice(0, source.sampleSize - source.sample.length)) {
-        source.sample.push({ title: node.title, handle: node.handle });
-      }
-
-      const rows: ItemRow[] = nodes.map((node) => ({
-        scanId,
-        resourceType: source.type,
-        resourceId: node.id,
-        handle: node.handle,
-        name: node.title,
-        ...evaluateNode(node),
-      }));
-
-      const flagged = rows.filter(
-        (r) => r.titleTooLong || r.descriptionTooLong || r.descriptionMissing,
+  for await (const nodes of paginate<ProductNode>(graphql, PRODUCTS_QUERY, "products")) {
+    productCount += nodes.length;
+    for (const node of nodes) {
+      const images = node.media.nodes
+        .filter((m) => m.mediaContentType === "IMAGE")
+        .map((m) => ({ alt: m.alt, url: m.image?.url ?? null }));
+      items.push(
+        analyze(scanId, "PRODUCT", node, images, {
+          notInCollection: node.collections.nodes.length === 0,
+        }),
       );
-      for (const row of flagged) {
-        if (row.titleTooLong) totals.longTitleCount++;
-        if (row.descriptionTooLong) totals.longDescriptionCount++;
-        if (row.descriptionMissing) totals.missingDescriptionCount++;
+      // Only products published to the Online Store have a page to check.
+      if (node.onlineStoreUrl && samples.products.length < PRODUCT_PAGE_SAMPLES) {
+        samples.products.push({ title: node.title, handle: node.handle });
       }
-      for (const row of rows) {
-        const key = row.metaTitle.toLowerCase();
-        if (!key) continue;
-        const group = byTitle.get(key) ?? [];
-        group.push({ row, stored: flagged.includes(row) });
-        byTitle.set(key, group);
-      }
+    }
+    // Keep the dashboard's progress bar moving while the scan runs.
+    await db.scan.update({ where: { id: scanId }, data: { productCount } });
+  }
 
-      if (flagged.length) {
-        await db.scanItem.createMany({ data: flagged });
+  for await (const nodes of paginate<CollectionNode>(graphql, COLLECTIONS_QUERY, "collections")) {
+    collectionCount += nodes.length;
+    for (const node of nodes) {
+      const images = node.image ? [{ alt: node.image.altText, url: node.image.url }] : [];
+      const empty = node.productsCount?.count === 0;
+      items.push(analyze(scanId, "COLLECTION", node, images, { empty }));
+      if (!empty && samples.collections.length < COLLECTION_PAGE_SAMPLES) {
+        samples.collections.push({ title: node.title, handle: node.handle });
       }
+    }
+    await db.scan.update({ where: { id: scanId }, data: { collectionCount } });
+  }
 
-      // Keep the dashboard's progress counters moving while the scan runs.
-      await db.scan.update({ where: { id: scanId }, data: totals });
+  // Checks across the whole catalog.
+  flagShared(items, (i) => i.row.metaTitle.toLowerCase() || null, "TITLE_DUPLICATE");
+  flagShared(items, (i) => i.row.metaDescription.toLowerCase() || null, "DESCRIPTION_DUPLICATE");
+  flagShared(items, (i) => i.bodyKey, "COPIED_CONTENT");
+  flagDuplicateHandles(items);
+
+  const flagged = items.filter((i) => i.issues.size > 0);
+  const rows = flagged.map(({ row, issues }) => ({
+    ...row,
+    titleDuplicate: issues.has("TITLE_DUPLICATE"),
+    issues: [...issues],
+  }));
+  for (let i = 0; i < rows.length; i += 500) {
+    await db.scanItem.createMany({ data: rows.slice(i, i + 500) });
+  }
+
+  const issueCounts: IssueCounts = { codes: {}, groups: {} };
+  for (const { issues } of flagged) {
+    for (const code of issues) issueCounts.codes[code] = (issueCounts.codes[code] ?? 0) + 1;
+    for (const group of ISSUE_GROUPS) {
+      if (group.codes.some((c) => issues.has(c))) {
+        issueCounts.groups[group.key] = (issueCounts.groups[group.key] ?? 0) + 1;
+      }
     }
   }
+  const count = (code: IssueCode) => issueCounts.codes[code] ?? 0;
+  await db.scan.update({
+    where: { id: scanId },
+    data: {
+      issueCounts,
+      longTitleCount: count("TITLE_LONG"),
+      longDescriptionCount: count("DESCRIPTION_LONG"),
+      missingDescriptionCount: count("DESCRIPTION_MISSING"),
+      duplicateTitleCount: count("TITLE_DUPLICATE"),
+    },
+  });
 
-  // Duplicate meta titles: upgrade rows already stored, insert the rest.
-  const duplicateGroups = [...byTitle.values()].filter((g) => g.length > 1);
-  const toUpdate: string[] = [];
-  const toInsert: ItemRow[] = [];
-  for (const group of duplicateGroups) {
-    for (const { row, stored } of group) {
-      totals.duplicateTitleCount++;
-      if (stored) toUpdate.push(row.resourceId);
-      else toInsert.push(row);
-    }
-  }
-  if (toUpdate.length) {
-    await db.scanItem.updateMany({
-      where: { scanId, resourceId: { in: toUpdate } },
-      data: { titleDuplicate: true },
-    });
-  }
-  if (toInsert.length) {
-    await db.scanItem.createMany({
-      data: toInsert.map((row) => ({ ...row, titleDuplicate: true })),
-    });
-  }
-  await db.scan.update({ where: { id: scanId }, data: totals });
-
-  // Structured data on a sample of live storefront pages.
-  const { blocked, checks } = await checkStructuredData(
+  // Live storefront pages, as search engines see them.
+  const { blocked, checks } = await checkStorefront(
     graphql,
     samples,
     (pagesChecked, pagesTotal) =>
@@ -300,7 +410,6 @@ async function runScan(scanId: string, graphql: GraphqlClient) {
   await db.scan.update({
     where: { id: scanId },
     data: {
-      ...totals,
       storefrontBlocked: blocked,
       schemaIssueCount: checks.filter((c) => c.status !== "OK").length,
       status: "COMPLETED",
@@ -309,14 +418,28 @@ async function runScan(scanId: string, graphql: GraphqlClient) {
   });
 }
 
-// Marks RUNNING scans that can no longer be in progress (e.g. after a server
+// Handles like "blue-shirt-1" next to an existing "blue-shirt" are usually left
+// over from duplicating a product or collection.
+function flagDuplicateHandles(items: Analyzed[]) {
+  const handles = new Set(items.map((i) => `${i.row.resourceType}:${i.row.handle}`));
+  for (const item of items) {
+    if (item.row.handleIssue) continue;
+    const match = item.row.handle.match(/^(.+)-\d$/);
+    if (match && handles.has(`${item.row.resourceType}:${match[1]}`)) {
+      item.row.handleIssue = `looks like a copy of “${match[1]}”`;
+      item.issues.add("HANDLE");
+    }
+  }
+}
+
+// Marks RUNNING scans that have stopped reporting progress (e.g. after a server
 // restart) as failed so the dashboard doesn't poll forever.
 export async function failStaleScans(shop: string) {
   await db.scan.updateMany({
     where: {
       shop,
       status: "RUNNING",
-      startedAt: { lt: new Date(Date.now() - SCAN_STALE_AFTER_MS) },
+      updatedAt: { lt: new Date(Date.now() - SCAN_STALE_AFTER_MS) },
     },
     data: {
       status: "FAILED",

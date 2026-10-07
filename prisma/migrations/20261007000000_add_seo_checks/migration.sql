@@ -1,0 +1,12 @@
+-- AlterTable
+ALTER TABLE "Scan" ADD COLUMN     "issueCounts" JSONB NOT NULL DEFAULT '{}',
+ADD COLUMN     "updatedAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP;
+
+-- AlterTable
+ALTER TABLE "ScanItem" ADD COLUMN     "badImageNames" INTEGER NOT NULL DEFAULT 0,
+ADD COLUMN     "handleIssue" TEXT,
+ADD COLUMN     "imageCount" INTEGER NOT NULL DEFAULT 0,
+ADD COLUMN     "imagesMissingAlt" INTEGER NOT NULL DEFAULT 0,
+ADD COLUMN     "issues" TEXT[] DEFAULT ARRAY[]::TEXT[],
+ADD COLUMN     "wordCount" INTEGER;
+

@@ -42,6 +42,8 @@ model Scan {
   status                  String // RUNNING | COMPLETED | FAILED
   error                   String?
   startedAt               DateTime      @default(now())
+  // Bumped on every progress write; a RUNNING scan that stops updating is treated as abandoned.
+  updatedAt               DateTime      @default(now()) @updatedAt
   completedAt             DateTime?
   productCount            Int           @default(0)
   collectionCount         Int           @default(0)
@@ -49,7 +51,11 @@ model Scan {
   longDescriptionCount    Int           @default(0)
   duplicateTitleCount     Int           @default(0)
   missingDescriptionCount Int           @default(0)
+  // Storefront pages (and the robots.txt/sitemap check) with at least one error or warning.
   schemaIssueCount        Int           @default(0)
+  // Items per issue code and per issue group (see app/seo/issues.ts). Empty on scans made
+  // before these checks existed.
+  issueCounts             Json          @default("{}")
   // True when the storefront is password protected, so pages could not be fetched.
   storefrontBlocked       Boolean       @default(false)
   // Progress for the dashboard progress bar. Totals are read from Shopify when the scan starts.
@@ -85,23 +91,32 @@ model ScanItem {
   titleDuplicate       Boolean @default(false)
   // Neither a custom SEO description nor body text to fall back on.
   descriptionMissing   Boolean @default(false)
+  // Every issue code that applies (see app/seo/issues.ts), including the ones above.
+  issues               String[] @default([])
+  // Details for the image, content and URL checks.
+  imageCount           Int     @default(0)
+  imagesMissingAlt     Int     @default(0)
+  badImageNames        Int     @default(0)
+  wordCount            Int?
+  handleIssue          String?
 
   @@index([scanId, resourceType])
   @@index([scanId, titleTooLong])
   @@index([scanId, descriptionTooLong])
 }
 
-// Structured data (JSON-LD) found on one sampled storefront page.
+// Checks on one sampled storefront page (structured data, indexing, headings, social
+// tags, images, links), or the site-wide robots.txt/sitemap check (pageType SITE).
 model SchemaCheck {
   id          String @id @default(cuid())
   scanId      String
   scan        Scan   @relation(fields: [scanId], references: [id], onDelete: Cascade)
-  pageType    String // HOME | PRODUCT | COLLECTION
+  pageType    String // SITE | HOME | PRODUCT | COLLECTION
   url         String
   label       String // "Homepage" or the product/collection title
   status      String // OK | ISSUES | FAILED
   schemaTypes Json // string[] of schema.org @type values found on the page
-  findings    Json // { severity: "error" | "warning" | "info", message: string }[]
+  findings    Json // { severity: "error" | "warning" | "info", category?: string, message: string }[]
 
   @@index([scanId])
 }

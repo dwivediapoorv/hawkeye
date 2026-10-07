@@ -20,53 +20,67 @@ import {
   getLatestScan,
   startScan,
 } from "../services/seo-scan.server";
-import type { Finding } from "../services/structured-data.server";
+import type { Category, Finding } from "../services/storefront-checks.server";
 import {
   DESCRIPTION_MAX_LENGTH,
   ITEMS_PAGE_SIZE,
   SCAN_STALE_AFTER_MS,
   TITLE_MAX_LENGTH,
 } from "../seo/limits";
+import {
+  ISSUE_GROUPS,
+  ISSUE_INFO,
+  isIssueCode,
+  type IssueCode,
+  type IssueCounts,
+  type IssueGroupKey,
+} from "../seo/issues";
 
 type ResourceFilter = "all" | "PRODUCT" | "COLLECTION";
-type IssueFilter = "all" | "title" | "description" | "missing" | "duplicate";
+type IssueFilter = "all" | IssueCode;
 
-const ISSUE_WHERE: Record<Exclude<IssueFilter, "all">, Record<string, boolean>> = {
-  title: { titleTooLong: true },
-  description: { descriptionTooLong: true },
-  missing: { descriptionMissing: true },
-  duplicate: { titleDuplicate: true },
+// These issues have their own boolean columns, which scans made before the
+// `issues` list existed also have, so filtering on them works for every scan.
+const LEGACY_ISSUE_WHERE: Partial<Record<IssueCode, Record<string, boolean>>> = {
+  TITLE_LONG: { titleTooLong: true },
+  TITLE_DUPLICATE: { titleDuplicate: true },
+  DESCRIPTION_LONG: { descriptionTooLong: true },
+  DESCRIPTION_MISSING: { descriptionMissing: true },
 };
 
-const PAGE_TYPE_ORDER = { HOME: 0, PRODUCT: 1, COLLECTION: 2 } as const;
+const PAGE_TYPE_ORDER = { SITE: 0, HOME: 1, PRODUCT: 2, COLLECTION: 3 } as const;
+const SEVERITY_ORDER = { error: 0, warning: 1, info: 2 } as const;
 
 export const loader = async ({ request }: LoaderFunctionArgs) => {
   const { session } = await authenticate.admin(request);
   const shop = session.shop;
 
   let scan = await getLatestScan(shop);
-  // Only clean up when the latest scan looks abandoned, rather than on every poll.
+  // Only clean up when the latest scan has stopped reporting progress, rather than on every poll.
   if (
     scan?.status === "RUNNING" &&
-    Date.now() - new Date(scan.startedAt).getTime() > SCAN_STALE_AFTER_MS
+    Date.now() - new Date(scan.updatedAt).getTime() > SCAN_STALE_AFTER_MS
   ) {
     await failStaleScans(shop);
     scan = await getLatestScan(shop);
   }
 
   const url = new URL(request.url);
-  const type = (url.searchParams.get("type") || "all") as ResourceFilter;
-  const issue = (url.searchParams.get("issue") || "all") as IssueFilter;
+  const typeParam = url.searchParams.get("type");
+  const type: ResourceFilter =
+    typeParam === "PRODUCT" || typeParam === "COLLECTION" ? typeParam : "all";
+  const issueParam = url.searchParams.get("issue") ?? "";
+  const issue: IssueFilter = isIssueCode(issueParam) ? issueParam : "all";
   const page = Math.max(1, Number(url.searchParams.get("page")) || 1);
 
   if (!scan) {
-    return { scan: null, items: [], total: 0, schemaChecks: [], page, type, issue };
+    return { scan: null, items: [], total: 0, schemaChecks: [], groupCounts: null, page, type, issue };
   }
 
   const where = {
     scanId: scan.id,
     ...(type !== "all" ? { resourceType: type } : {}),
-    ...(issue !== "all" ? ISSUE_WHERE[issue] : {}),
+    ...(issue !== "all" ? (LEGACY_ISSUE_WHERE[issue] ?? { issues: { has: issue } }) : {}),
   };
 
   const [total, items, schemaChecks] = await Promise.all([
@@ -89,18 +103,38 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
 
   return {
     scan,
-    items,
+    items: items.map((item) => ({ ...item, issues: item.issues.filter(isIssueCode) })),
     total,
     schemaChecks: schemaChecks.map((c) => ({
       ...c,
       schemaTypes: c.schemaTypes as string[],
-      findings: c.findings as Finding[],
+      findings: (c.findings as Finding[])
+        .slice()
+        .sort((x, y) => SEVERITY_ORDER[x.severity] - SEVERITY_ORDER[y.severity]),
     })),
+    groupCounts: await groupCountsFor(scan.id, scan.issueCounts as Partial<IssueCounts>),
     page,
     type,
     issue,
   };
 };
+
+// Items per issue group for the summary tiles. Scans made before the image,
+// content and URL checks existed only have the meta tag counts (null = not checked).
+async function groupCountsFor(scanId: string, counts: Partial<IssueCounts>) {
+  if (counts.groups && counts.codes) {
+    return { legacy: false, groups: counts.groups, codes: counts.codes };
+  }
+  const [titles, descriptions] = await Promise.all([
+    db.scanItem.count({ where: { scanId, OR: [{ titleTooLong: true }, { titleDuplicate: true }] } }),
+    db.scanItem.count({ where: { scanId, OR: [{ descriptionTooLong: true }, { descriptionMissing: true }] } }),
+  ]);
+  return {
+    legacy: true,
+    groups: { titles, descriptions } as Partial<Record<IssueGroupKey, number>>,
+    codes: {} as Partial<Record<IssueCode, number>>,
+  };
+}
 
 export const action = async ({ request }: ActionFunctionArgs) => {
   const { admin, session } = await authenticate.admin(request);
@@ -126,6 +160,16 @@ const PAGE_TYPE_LABEL: Record<string, string> = {
   HOME: "Homepage",
   PRODUCT: "Product",
   COLLECTION: "Collection",
+};
+
+const CATEGORY_LABEL: Record<Category, string> = {
+  schema: "Structured data",
+  indexing: "Indexing",
+  headings: "Headings",
+  social: "Social sharing",
+  images: "Images",
+  links: "Links",
+  site: "Site",
 };
 
 type ScanProgressFields = {
@@ -165,8 +209,45 @@ function scanProgress(
   return { value, label: "Checking storefront pages…" };
 }
 
+// Badge text for the image, content and URL issues in the "Other issues" column.
+type IssueItem = {
+  resourceType: string;
+  issues: IssueCode[];
+  imageCount: number;
+  imagesMissingAlt: number;
+  badImageNames: number;
+  wordCount: number | null;
+  handleIssue: string | null;
+};
+
+function otherIssueBadges(item: IssueItem): { tone: "critical" | "warning"; text: string }[] {
+  const has = (code: IssueCode) => item.issues.includes(code);
+  const badges: { tone: "critical" | "warning"; text: string }[] = [];
+  if (has("THIN_CONTENT")) badges.push({ tone: "warning", text: `Thin content · ${item.wordCount ?? 0} words` });
+  if (has("COPIED_CONTENT")) badges.push({ tone: "critical", text: "Copied description" });
+  if (has("MISSING_ALT")) {
+    badges.push({
+      tone: "critical",
+      text:
+        item.resourceType === "COLLECTION"
+          ? "Image missing alt text"
+          : `${item.imagesMissingAlt} of ${item.imageCount} images missing alt text`,
+    });
+  }
+  if (has("IMAGE_FILENAMES")) {
+    badges.push({
+      tone: "warning",
+      text: `${item.badImageNames} camera-style image ${item.badImageNames === 1 ? "name" : "names"}`,
+    });
+  }
+  if (has("HANDLE")) badges.push({ tone: "warning", text: `URL ${item.handleIssue ?? "needs attention"}` });
+  if (has("EMPTY_COLLECTION")) badges.push({ tone: "critical", text: "Empty collection" });
+  if (has("NO_COLLECTION")) badges.push({ tone: "warning", text: "Not in any collection" });
+  return badges;
+}
+
 export default function Index() {
-  const { scan, items, total, schemaChecks, page, type, issue } =
+  const { scan, items, total, schemaChecks, groupCounts, page, type, issue } =
     useLoaderData<typeof loader>();
   const fetcher = useFetcher<typeof action>();
   const revalidator = useRevalidator();
@@ -194,7 +275,7 @@ export default function Index() {
 
   const showProgress = busy || finishing;
 
-  // Poll while a scan is in progress so the counters and table fill in live.
+  // Poll while a scan is in progress so the progress bar moves.
   useEffect(() => {
     if (!isRunning) return;
     const interval = setInterval(() => {
@@ -228,19 +309,27 @@ export default function Index() {
   const busyProps = busy ? { loading: true, disabled: true } : {};
 
   const pageCount = Math.max(1, Math.ceil(total / ITEMS_PAGE_SIZE));
-  const schemaDone = scan?.status === "COMPLETED";
+  const scanDone = scan?.status === "COMPLETED";
   // Issues found so far are real, but "All good" only holds once the scan has finished.
   const issueStatus = (count: number): StatStatus =>
     count
       ? { tone: "critical", text: "Needs attention" }
-      : schemaDone
+      : scanDone
         ? { tone: "success", text: "All good" }
         : { text: isRunning ? "Checking…" : "Incomplete" };
-  const schemaStatus: StatStatus = scan?.storefrontBlocked
+  const pagesStatus: StatStatus = scan?.storefrontBlocked
     ? { tone: "warning", text: "Not checked" }
-    : schemaDone
+    : scanDone
       ? issueStatus(scan?.schemaIssueCount ?? 0)
       : { text: isRunning ? "Waiting" : "Not checked" };
+
+  // "3 too long · 1 duplicate", or the group's description when nothing was found.
+  const breakdown = (codes: IssueCode[], fallback: string) => {
+    const parts = codes
+      .filter((code) => groupCounts?.codes[code])
+      .map((code) => `${groupCounts?.codes[code]} ${ISSUE_INFO[code].short}`);
+    return parts.length ? parts.join(" · ") : fallback;
+  };
 
   return (
     <s-page heading="Hawk Eye" inlineSize="large">
@@ -263,6 +352,16 @@ export default function Index() {
         </s-banner>
       )}
 
+      {groupCounts?.legacy && !showProgress && (
+        <s-banner heading="Hawk Eye checks more now" tone="info">
+          <s-paragraph>
+            Run a new scan to check image alt text, thin and copied content,
+            URLs, and indexing, headings, social tags and broken links on your
+            storefront pages.
+          </s-paragraph>
+        </s-banner>
+      )}
+
       {!scan && !showProgress && (
         <s-section>
           <ScanIntro
@@ -270,11 +369,11 @@ export default function Index() {
             onScan={runScan}
             disabled={busy}
           >
-            The scan reads every active product and collection and flags meta
-            titles longer than {TITLE_MAX_LENGTH} characters, meta descriptions
-            longer than {DESCRIPTION_MAX_LENGTH} characters, missing
-            descriptions and duplicate titles. It also checks the structured
-            data (schema.org JSON-LD) your storefront pages render.
+            The scan reads every active product and collection and checks meta
+            titles and descriptions, image alt text, content and URLs. It also
+            checks your live storefront pages for indexing problems,
+            structured data, headings, social sharing tags, slow images and
+            broken links.
           </ScanIntro>
         </s-section>
       )}
@@ -296,41 +395,29 @@ export default function Index() {
               gridTemplateColumns="repeat(auto-fit, minmax(170px, 1fr))"
               gap="base"
             >
+              {ISSUE_GROUPS.map((group) => {
+                const value = groupCounts?.groups[group.key];
+                return (
+                  <Stat
+                    key={group.key}
+                    label={group.label}
+                    caption={value === undefined ? "Run a new scan" : breakdown(group.codes, group.caption)}
+                    value={value ?? null}
+                    status={value === undefined ? { text: "Not checked" } : issueStatus(value)}
+                  />
+                );
+              })}
               <Stat
-                label="Long titles"
-                caption={`Over ${TITLE_MAX_LENGTH} characters`}
-                value={scan.longTitleCount}
-                status={issueStatus(scan.longTitleCount)}
-              />
-              <Stat
-                label="Long descriptions"
-                caption={`Over ${DESCRIPTION_MAX_LENGTH} characters`}
-                value={scan.longDescriptionCount}
-                status={issueStatus(scan.longDescriptionCount)}
-              />
-              <Stat
-                label="Missing descriptions"
-                caption="No SEO or body text"
-                value={scan.missingDescriptionCount}
-                status={issueStatus(scan.missingDescriptionCount)}
-              />
-              <Stat
-                label="Duplicate titles"
-                caption="Shared by 2+ pages"
-                value={scan.duplicateTitleCount}
-                status={issueStatus(scan.duplicateTitleCount)}
-              />
-              <Stat
-                label="Schema issues"
+                label="Storefront pages"
                 caption={
                   scan.storefrontBlocked
                     ? "Storefront is locked"
-                    : schemaDone
-                      ? `${schemaChecks.length} pages sampled`
+                    : scanDone
+                      ? `${schemaChecks.filter((c) => c.pageType !== "SITE").length} pages, robots.txt & sitemap`
                       : "Checked after the catalog"
                 }
-                value={scan.schemaIssueCount}
-                status={schemaStatus}
+                value={scan.storefrontBlocked ? null : scan.schemaIssueCount}
+                status={pagesStatus}
               />
             </s-grid>
           </s-stack>
@@ -338,7 +425,7 @@ export default function Index() {
       )}
 
       {scan && !showProgress && (
-        <s-section heading="Meta tag issues">
+        <s-section heading="Products & collections">
           <s-stack direction="inline" gap="base" alignItems="end">
             <s-select
               label="Type"
@@ -355,10 +442,15 @@ export default function Index() {
               onChange={(e) => setFilter("issue", e.currentTarget.value)}
             >
               <s-option value="all">Any issue</s-option>
-              <s-option value="title">Title too long</s-option>
-              <s-option value="description">Description too long</s-option>
-              <s-option value="missing">Description missing</s-option>
-              <s-option value="duplicate">Duplicate title</s-option>
+              {ISSUE_GROUPS.map((group) => (
+                <s-option-group key={group.key} label={group.label}>
+                  {group.codes.map((code) => (
+                    <s-option key={code} value={code}>
+                      {ISSUE_INFO[code].label}
+                    </s-option>
+                  ))}
+                </s-option-group>
+              ))}
             </s-select>
             <s-text color="subdued">
               {total} {total === 1 ? "item" : "items"}
@@ -368,11 +460,9 @@ export default function Index() {
           {items.length === 0 ? (
             <s-box padding="large">
               <s-paragraph>
-                {isRunning
-                  ? "No issues found yet."
-                  : schemaDone
-                    ? "No issues match these filters. 🎉"
-                    : "No issues were found before the scan stopped. Run it again for complete results."}
+                {scanDone
+                  ? "No issues match these filters. 🎉"
+                  : "No issues were found before the scan stopped. Run it again for complete results."}
               </s-paragraph>
             </s-box>
           ) : (
@@ -388,49 +478,69 @@ export default function Index() {
                 <s-table-header listSlot="secondary">Type</s-table-header>
                 <s-table-header>Meta title</s-table-header>
                 <s-table-header>Meta description</s-table-header>
+                <s-table-header>Other issues</s-table-header>
                 <s-table-header></s-table-header>
               </s-table-header-row>
               <s-table-body>
-                {items.map((item) => (
-                  <s-table-row key={item.id}>
-                    <s-table-cell>
-                      <s-text type="strong">{item.name}</s-text>
-                    </s-table-cell>
-                    <s-table-cell>
-                      <s-badge>
-                        {item.resourceType === "PRODUCT" ? "Product" : "Collection"}
-                      </s-badge>
-                    </s-table-cell>
-                    <s-table-cell>
-                      <MetaValue
-                        value={item.metaTitle}
-                        length={item.titleLength}
-                        max={TITLE_MAX_LENGTH}
-                        tooLong={item.titleTooLong}
-                        isDefault={item.titleIsDefault}
-                        extra={item.titleDuplicate ? "Duplicate" : undefined}
-                      />
-                    </s-table-cell>
-                    <s-table-cell>
-                      <MetaValue
-                        value={item.metaDescription}
-                        length={item.descriptionLength}
-                        max={DESCRIPTION_MAX_LENGTH}
-                        tooLong={item.descriptionTooLong}
-                        isDefault={item.descriptionIsDefault}
-                        missing={item.descriptionMissing}
-                      />
-                    </s-table-cell>
-                    <s-table-cell>
-                      <s-link
-                        href={adminUrl(item.resourceType, item.resourceId)}
-                        target="_top"
-                      >
-                        Edit
-                      </s-link>
-                    </s-table-cell>
-                  </s-table-row>
-                ))}
+                {items.map((item) => {
+                  const others = otherIssueBadges(item);
+                  return (
+                    <s-table-row key={item.id}>
+                      <s-table-cell>
+                        <s-text type="strong">{item.name}</s-text>
+                      </s-table-cell>
+                      <s-table-cell>
+                        <s-badge>
+                          {item.resourceType === "PRODUCT" ? "Product" : "Collection"}
+                        </s-badge>
+                      </s-table-cell>
+                      <s-table-cell>
+                        <MetaValue
+                          value={item.metaTitle}
+                          length={item.titleLength}
+                          max={TITLE_MAX_LENGTH}
+                          tooLong={item.titleTooLong}
+                          tooShort={item.issues.includes("TITLE_SHORT")}
+                          isDefault={item.titleIsDefault}
+                          duplicate={item.titleDuplicate}
+                        />
+                      </s-table-cell>
+                      <s-table-cell>
+                        <MetaValue
+                          value={item.metaDescription}
+                          length={item.descriptionLength}
+                          max={DESCRIPTION_MAX_LENGTH}
+                          tooLong={item.descriptionTooLong}
+                          tooShort={item.issues.includes("DESCRIPTION_SHORT")}
+                          isDefault={item.descriptionIsDefault}
+                          missing={item.descriptionMissing}
+                          duplicate={item.issues.includes("DESCRIPTION_DUPLICATE")}
+                        />
+                      </s-table-cell>
+                      <s-table-cell>
+                        {others.length ? (
+                          <s-stack direction="block" gap="small-200">
+                            {others.map((b) => (
+                              <s-stack key={b.text} direction="inline">
+                                <s-badge tone={b.tone}>{b.text}</s-badge>
+                              </s-stack>
+                            ))}
+                          </s-stack>
+                        ) : (
+                          <s-text color="subdued">—</s-text>
+                        )}
+                      </s-table-cell>
+                      <s-table-cell>
+                        <s-link
+                          href={adminUrl(item.resourceType, item.resourceId)}
+                          target="_top"
+                        >
+                          Edit
+                        </s-link>
+                      </s-table-cell>
+                    </s-table-row>
+                  );
+                })}
               </s-table-body>
             </s-table>
           )}
@@ -438,31 +548,28 @@ export default function Index() {
       )}
 
       {scan && !showProgress && (
-        <s-section heading="Structured data">
+        <s-section heading="Storefront pages">
           {scan.storefrontBlocked ? (
             <s-banner heading="Storefront is password protected" tone="warning">
               <s-paragraph>
-                Structured data can only be checked on pages search engines
-                can reach. Turn off the password under{" "}
+                Storefront pages can only be checked when search engines can
+                reach them. Turn off the password under{" "}
                 <s-text type="strong">Online Store → Preferences</s-text> and
                 run the scan again.
               </s-paragraph>
             </s-banner>
-          ) : !schemaDone ? (
+          ) : !scanDone ? (
             <s-box padding="large">
-              <s-paragraph>
-                {isRunning
-                  ? "Structured data is checked once products and collections have been read."
-                  : "Structured data was not checked. Run the scan again."}
-              </s-paragraph>
+              <s-paragraph>Storefront pages were not checked. Run the scan again.</s-paragraph>
             </s-box>
           ) : (
             <>
               <s-paragraph>
                 <s-text color="subdued">
                   Checked on the homepage and a sample of product and collection
-                  pages. Schema comes from the theme, so one page of each type
-                  represents all of them.
+                  pages, plus your robots.txt and sitemap. Most of this comes
+                  from the theme, so one page of each type usually represents
+                  all of them.
                 </s-text>
               </s-paragraph>
               <s-table>
@@ -478,12 +585,12 @@ export default function Index() {
                       <s-table-cell>
                         <s-stack direction="block" gap="small-200">
                           <s-text type="strong">
-                            {check.pageType === "HOME"
-                              ? "Homepage"
+                            {check.pageType === "HOME" || check.pageType === "SITE"
+                              ? check.label
                               : `${PAGE_TYPE_LABEL[check.pageType]}: ${check.label}`}
                           </s-text>
                           <s-link href={check.url} target="_blank">
-                            View page
+                            {check.pageType === "SITE" ? "View sitemap" : "View page"}
                           </s-link>
                         </s-stack>
                       </s-table-cell>
@@ -505,7 +612,9 @@ export default function Index() {
                         </s-badge>
                       </s-table-cell>
                       <s-table-cell>
-                        {check.schemaTypes.length ? (
+                        {check.pageType === "SITE" ? (
+                          <s-text color="subdued">—</s-text>
+                        ) : check.schemaTypes.length ? (
                           <s-stack direction="inline" gap="small-200">
                             {check.schemaTypes.map((t) => (
                               <s-badge key={t}>{t}</s-badge>
@@ -535,7 +644,10 @@ export default function Index() {
                                       ? "Warning"
                                       : "Tip"}
                                 </s-badge>
-                                <s-text>{f.message}</s-text>
+                                <s-text>
+                                  {f.category ? `${CATEGORY_LABEL[f.category]}: ` : ""}
+                                  {f.message}
+                                </s-text>
                               </s-stack>
                             ))}
                           </s-stack>
@@ -565,7 +677,7 @@ function Stat({
 }: {
   label: string;
   caption: string;
-  value: number;
+  value: number | null;
   status: StatStatus;
 }) {
   return (
@@ -574,7 +686,7 @@ function Stat({
         <s-text type="strong">{label}</s-text>
         <s-stack direction="inline" gap="small-200" alignItems="center">
           <span style={{ fontSize: "22px", fontWeight: 650, lineHeight: 1.2 }}>
-            {value.toLocaleString()}
+            {value === null ? "—" : value.toLocaleString()}
           </span>
           <s-badge {...(status.tone ? { tone: status.tone } : {})}>{status.text}</s-badge>
         </s-stack>
@@ -589,17 +701,19 @@ function MetaValue({
   length,
   max,
   tooLong,
+  tooShort,
   isDefault,
   missing,
-  extra,
+  duplicate,
 }: {
   value: string;
   length: number;
   max: number;
   tooLong: boolean;
+  tooShort: boolean;
   isDefault: boolean;
   missing?: boolean;
-  extra?: string;
+  duplicate: boolean;
 }) {
   const preview = value.length > 120 ? `${value.slice(0, 120)}…` : value;
   return (
@@ -608,12 +722,13 @@ function MetaValue({
         {missing ? (
           <s-badge tone="critical">Missing</s-badge>
         ) : (
-          <s-badge tone={tooLong ? "critical" : "success"}>
+          <s-badge tone={tooLong ? "critical" : tooShort ? "warning" : "success"}>
             {length} / {max}
           </s-badge>
         )}
+        {tooShort && !missing && <s-badge tone="warning">Too short</s-badge>}
         {isDefault && !missing && <s-badge tone="warning">Default</s-badge>}
-        {extra && <s-badge tone="critical">{extra}</s-badge>}
+        {duplicate && <s-badge tone="critical">Duplicate</s-badge>}
       </s-stack>
       <s-text color="subdued">{preview || "—"}</s-text>
     </s-stack>
