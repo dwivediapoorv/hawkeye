@@ -30,6 +30,10 @@ export default function App() {
         <a href="/app" rel="home">
           Dashboard
         </a>
+        {/* Alternative dashboard layouts, side by side while we pick one. */}
+        <s-link href="/app/simple">Simple</s-link>
+        <s-link href="/app/tabs">Tabs</s-link>
+        <s-link href="/app/visual">Visual</s-link>
       </s-app-nav>
       <Outlet />
     </AppProvider>

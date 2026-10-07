@@ -1,0 +1,112 @@
+.score {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 16px 32px;
+}
+
+.scoreNumber {
+  font-size: 56px;
+  font-weight: 300;
+  line-height: 1;
+  color: #1a1a1a;
+  font-variant-numeric: tabular-nums;
+}
+
+.scoreOutOf {
+  font-size: 18px;
+  color: #8a8a8a;
+}
+
+.scoreBody {
+  flex: 1;
+  min-width: 220px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.bar {
+  height: 12px;
+  border-radius: 999px;
+  background: #ebebeb;
+  overflow: hidden;
+}
+
+.miniBar {
+  height: 6px;
+  border-radius: 999px;
+  background: #ebebeb;
+  overflow: hidden;
+}
+
+.fill {
+  height: 100%;
+  border-radius: inherit;
+  background: linear-gradient(90deg, #1a8cff, #2ee6d6);
+  transition: width 0.8s ease-out;
+}
+
+.cards {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 12px;
+}
+
+/* Area card: also a button that filters the table below. */
+.card {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 16px;
+  border: 1px solid #e3e3e3;
+  border-radius: 12px;
+  background: #fff;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  transition:
+    border-color 0.15s ease,
+    box-shadow 0.15s ease;
+}
+
+.card:hover {
+  border-color: #b5d4fb;
+}
+
+.card:focus-visible {
+  outline: 2px solid #1565d8;
+  outline-offset: 2px;
+}
+
+.active {
+  border-color: #1565d8;
+  box-shadow: 0 0 0 1px #1565d8;
+}
+
+.cardTop {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: #303030;
+  font-weight: 600;
+}
+
+.cardCount {
+  font-size: 28px;
+  font-weight: 650;
+  line-height: 1;
+  color: #1a1a1a;
+}
+
+.cardCaption {
+  color: #616161;
+  font-size: 13px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .fill,
+  .card {
+    transition: none;
+  }
+}
