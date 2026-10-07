@@ -336,7 +336,7 @@ export default function Index() {
   };
 
   return (
-    <s-page heading="Hawk Eye" inlineSize="large">
+    <s-page heading="Hawkeye" inlineSize="large">
       {/* The empty state and the progress bar have their own scan control. */}
       {scan && !showProgress && (
         <s-button slot="primary-action" onClick={runScan} {...busyProps}>

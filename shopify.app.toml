@@ -1,6 +1,6 @@
 # This file stores configurations for your Shopify app.
 client_id = ""
-name = "Hawk Eye"
+name = "Hawkeye"
 application_url = "https://hawkeye-production-fcfb.up.railway.app"
 embedded = true
 
